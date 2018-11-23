@@ -1,0 +1,295 @@
+---
+title: "LDA with MASS::lda"
+author: "Jesse Connell"
+date: "11/23/2018"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+---
+
+The below provides a simple walkthrough of the LDA features provided by the MASS
+R package, using more of a geometric/vector interpretation than a 
+classifier/machine learning one.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r helpers}
+library(ggplot2)
+library(knitr)
+
+basic <- function(Nper=1000) {
+  # meas 1 tells us nothing useful.
+  # meas 2 is somewhat lower for group 1 and higher for group 2
+  # meas 3 is somewhat higher for group 1 and lower for group 2
+  obs <- data.frame(
+    Meas1 = rnorm(n = Nper*2),
+    Meas2 = c(rnorm(n = Nper, mean = -1), rnorm(n = Nper, mean = 1)),
+    Meas3 = c(rnorm(n = Nper, mean = 1), rnorm(n = Nper, mean = -1)),
+    Group = rep(c("Group1","Group2"), each=Nper)
+  )
+  # we'll have variables that just happen to look like z-scores...
+  for (m in c("Meas1", "Meas2", "Meas3")) {
+    obs[[m]] <- (obs[[m]] - mean(obs[[m]]) ) / sd(obs[[m]])
+  }
+  obs
+}
+
+### some vector math helper functions
+dotprod <- function(x, y) sum(x * y) # dot product
+vecnorm <- function(x) x/sqrt(sum(x^2)) # normalize to unit vector
+
+hist_grp <- function(obs, measurement, breaks=seq(-5, 5, 0.1)) {
+  ggplot(obs) +
+    geom_histogram(aes_(x = obs[[measurement]],
+                        fill = obs[["Group"]]),
+                   breaks = breaks,
+                   position = "identity",
+                   alpha = 0.5)
+}
+
+hist_grp_old <- function(obs, measurement) {
+  chunks <- split(obs, obs$Group)
+  layout(matrix(1:length(chunks)))
+  for (obs_m in names(chunks)) {
+    chunk <- chunks[[obs_m]]
+    hist(chunk[[measurement]], breaks = seq(-100, 100, 0.1),
+         xlim = c(-3, 3),
+         xlab = "Measurement",
+         main = paste(obs_m, measurement)
+         )
+  }
+}
+```
+
+# LDA - A Basic Case
+
+## Prologue
+
+If we have a set of samples in N groups, and M different measurements per 
+sample, what best differentiates the *groups* of samples from one another?  (Not
+just, what view of the measurements best separates the *samples* from one
+another; then we'd be thinking PCA, not LDA.)  Here we have two groups and three
+continuous numeric measurements that just happen to each have a mean of zero and
+a standard deviation of one.  With only two groups we only need a single linear 
+discriminant to distinguish them, too.
+
+```{r}
+observations <- basic()
+preview <- do.call(rbind,
+                   lapply(split(observations, observations$Group),
+                          head,
+                          n = 5))
+kable(preview, row.names = FALSE, digits = 3)
+summary(observations)
+sapply(observations[, 1:3], sd)
+lapply(split(observations, observations$Group), summary)
+lapply(split(observations, observations$Group), function(chunk) sapply(chunk[, 1:3], sd))
+```
+
+### Single-Measurement View
+
+Thinking most naively, is there a single measurement that divides the groups nicely?
+
+```{r}
+hist_grp(observations, "Meas1")
+hist_grp(observations, "Meas2")
+hist_grp(observations, "Meas3")
+```
+
+Not really. Meas1 looks indistinguishable between the two groups, and Meas2 and
+Meas3 provide a hint but not enough to cleanly separate the two groups.  Can we
+see a combination of the measurements that makes it clearer?
+
+### Two-Measurement View
+
+```{r}
+ggplot(observations) + geom_point(aes(x = Meas1, y = Meas2, color = Group))
+ggplot(observations) + geom_point(aes(x = Meas1, y = Meas3, color = Group))
+ggplot(observations) + geom_point(aes(x = Meas2, y = Meas3, color = Group))
+```
+
+Well, Meas3 versus Meas2 gives a much better hint at the best separation: a 
+diagonal line through the origin, heading from the lower-left to the 
+upper-right, where points to the upper-left are probably Group1 and those in the
+lower-right are probably Group2.
+
+### A Linear Discriminant
+
+Or, to think of it as a single vector pointing in the direction of the most 
+separation between the groups, it's a line running upper-left to lower-right.
+
+```{r}
+# Faded colors for arrows to match the points
+# Thanks https://stackoverflow.com/a/8197703
+cols <- hcl(h = seq(15, 375, length = 3), c = 100, l = 30)[1:2]
+
+segs <- data.frame(x = c(0, 0),
+                   y = c(0, 0),
+                   xend = c(-1, 1)/sqrt(2),
+                   yend = c(1, -1)/sqrt(2))
+
+ggplot(observations) + geom_point(aes(x = Meas2, y = Meas3, color = Group)) +
+  coord_cartesian(xlim = c(-3, 3), ylim = c(-3, 3)) + 
+  geom_abline(intercept = 0,
+              slope = 1,
+              linetype="dotted") +
+  geom_segment(data = segs,
+               aes(x=x, y=y, xend=xend, yend=yend),
+               arrow=arrow(angle=45, length = unit(0.2, "cm"), type="closed"), color=cols)
+```
+
+Speaking as though the three measurements define a 3D space, that direction 
+defined by the blue arrow above lies along the unit vector <0, 1, -1>/sqrt(2)
+(if pointing from Group1 toward Group2):
+
+```{r}
+comps <- data.frame(Component = c(0, 1, -1)/sqrt(2))
+rownames(comps) <- paste0("Meas", 1:3)
+kable(comps, digits = 3)
+```
+
+We can define a new axis (LD1) as a linear combination of the original three
+measurements:
+
+```{r}
+ld <- apply(observations[, 1:3], 1, dotprod, y = comps$Component)
+ld <- data.frame(LD1 = ld,
+           Group = observations$Group)
+hist_grp(ld, "LD1", seq(-4, 4, 0.1)) + xlab("LD1")
+```
+
+This new number gives better separation between the groups than any of the
+individual measurements.
+
+```{r}
+# Does this work the way I think it might?
+ld$Prediction <- c("Group1", "Group2")[(ld$LD1 >= 0) + 1]
+table(ld[, 2:3])
+```
+
+## Where LDA Comes In
+
+LDA can find that best direction for us automatically.
+
+```{r LDA Basic}
+lds <- MASS::lda(formula = Group ~ . , data = observations)
+```
+
+### Return Value
+
+The returned object is of class `r class (lds)`, but behaves like a regular list of these things:
+
+#### prior
+
+    `r lds$prior`
+
+We didn't specify the prior probability that a given sample would be in a 
+particular group, and we gave equal proportions of each here, so it defaulted to
+that.
+
+#### counts
+
+    `r lds$counts`
+
+Just numbers of samples per group.
+
+#### means
+
+```{r echo=FALSE}
+kable(lds$means)
+```
+ 
+Just the means per measurement per group.
+
+#### scaling
+
+```{r echo=FALSE}
+kable(lds$scaling, digits=3)
+```
+
+**Hey look, that points in the same direction as the vector in measurement-space
+we noticed before!**  More on this later.
+
+#### lev
+
+    `r lds$lev`
+
+Dunno, the `?MASS::lda` text doesn't mention it, but it looks like it's just the
+grouping values it saw.
+
+#### svd
+
+    `r lds$svd`
+
+Ratios (here, just ratio singular) of between-group and within-group standard 
+deviations for the LD variables (here, just variable singular).  The standard
+deviation in LD1 value is much higher between the two groups than within them.
+
+#### N
+
+    `r lds$N`
+
+Just how many observations there were total.
+
+#### call
+
+    `r deparse(lds$call)`
+
+The function as we called it.
+
+#### terms
+
+```{r echo=FALSE}
+lds$terms
+```
+
+Also not mentioned in the help text.
+
+### Interpretation
+
+```{r}
+# vector dot product
+dot <- function(x, y) sum(x * y)
+
+# dot product of each obsevation with the scaling vector
+projections <- apply(observations[, 1:3], 1, function(row) {
+  dot(row, lds$scaling[, 1])
+})
+
+projections <- data.frame(Projection = projections,
+                          Group = observations$Group)
+
+ggplot(projections) +
+  geom_histogram(aes(x = Projection, fill = Group),
+                 position = 'identity',
+                 breaks = seq(-5, 5, 0.1),
+                 alpha = 0.5)
+
+# unit vector pointing from Group1 to Group2, in the same direction as
+# lds$scaling.
+unit_vec <- c(0, 1, -1)/sqrt(2)
+# huh, it got longer by sqrt(2) even though it already lay along lds$scaling. 
+# In other words, lds$scaling is not a unit vector itself.  Why is this?  This
+# means while it's a dot product it's not a vector projection like I figured it
+# would be.
+dot(unit_vec, lds$scaling)
+
+
+# Or to view it side-by-side with my value from before:
+scalings <- data.frame(MyLD1 = comps$Component,
+                       MASSLD1 = lds$scaling[, 1],
+                       MASSLD1Norm = vecnorm(lds$scaling[, 1]))
+kable(scalings, digits = 3)
+
+p <- predict(lds)
+
+# also, this is not quite the same as the above.  why not?
+table(cbind.data.frame(observations$Group, p$class))
+
+# at least, predict() does seem to work roughly the way I think it should.
+p2 <- factor(c("Group1", "Group2")[(p$x >= 0) + 1])
+table(cbind.data.frame(observations$Group, p2))
+```
