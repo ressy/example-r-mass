@@ -9,8 +9,8 @@ output:
 ---
 
 The below provides a simple walkthrough of the LDA features provided by the MASS
-R package, using more of a geometric/vector interpretation than a 
-classifier/machine learning one.
+R package, using a simple idealized case and more of a geometric/vector
+interpretation than a classifier/machine learning one.
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -20,7 +20,8 @@ knitr::opts_chunk$set(echo = TRUE)
 library(ggplot2)
 library(knitr)
 
-basic <- function(Nper=1000) {
+# create a very basic data frame of input data for the LDA.
+make_data_basic <- function(Nper=1000) {
   # meas 1 tells us nothing useful.
   # meas 2 is somewhat lower for group 1 and higher for group 2
   # meas 3 is somewhat higher for group 1 and lower for group 2
@@ -41,26 +42,15 @@ basic <- function(Nper=1000) {
 dotprod <- function(x, y) sum(x * y) # dot product
 vecnorm <- function(x) x/sqrt(sum(x^2)) # normalize to unit vector
 
+# histogram for a given measurement, overlaying all groups
 hist_grp <- function(obs, measurement, breaks=seq(-5, 5, 0.1)) {
   ggplot(obs) +
     geom_histogram(aes_(x = obs[[measurement]],
                         fill = obs[["Group"]]),
                    breaks = breaks,
                    position = "identity",
-                   alpha = 0.5)
-}
-
-hist_grp_old <- function(obs, measurement) {
-  chunks <- split(obs, obs$Group)
-  layout(matrix(1:length(chunks)))
-  for (obs_m in names(chunks)) {
-    chunk <- chunks[[obs_m]]
-    hist(chunk[[measurement]], breaks = seq(-100, 100, 0.1),
-         xlim = c(-3, 3),
-         xlab = "Measurement",
-         main = paste(obs_m, measurement)
-         )
-  }
+                   alpha = 0.5) +
+    labs(x = measurement, y = "Count", fill = "Group")
 }
 ```
 
@@ -77,7 +67,7 @@ a standard deviation of one.  With only two groups we only need a single linear
 discriminant to distinguish them, too.
 
 ```{r}
-observations <- basic()
+observations <- make_data_basic()
 preview <- do.call(rbind,
                    lapply(split(observations, observations$Group),
                           head,
@@ -122,23 +112,15 @@ Or, to think of it as a single vector pointing in the direction of the most
 separation between the groups, it's a line running upper-left to lower-right.
 
 ```{r}
-# Faded colors for arrows to match the points
-# Thanks https://stackoverflow.com/a/8197703
-cols <- hcl(h = seq(15, 375, length = 3), c = 100, l = 30)[1:2]
-
-segs <- data.frame(x = c(0, 0),
-                   y = c(0, 0),
-                   xend = c(-1, 1)/sqrt(2),
-                   yend = c(1, -1)/sqrt(2))
-
 ggplot(observations) + geom_point(aes(x = Meas2, y = Meas3, color = Group)) +
   coord_cartesian(xlim = c(-3, 3), ylim = c(-3, 3)) + 
   geom_abline(intercept = 0,
               slope = 1,
               linetype="dotted") +
-  geom_segment(data = segs,
-               aes(x=x, y=y, xend=xend, yend=yend),
-               arrow=arrow(angle=45, length = unit(0.2, "cm"), type="closed"), color=cols)
+  geom_segment(x = 0, y = 0, xend = 1, yend = -1,
+               arrow = arrow(angle = 45,
+                             length = unit(0.2, "cm"),
+                             type="closed"))
 ```
 
 Speaking as though the three measurements define a 3D space, that direction 
@@ -158,16 +140,19 @@ measurements:
 ld <- apply(observations[, 1:3], 1, dotprod, y = comps$Component)
 ld <- data.frame(LD1 = ld,
            Group = observations$Group)
-hist_grp(ld, "LD1", seq(-4, 4, 0.1)) + xlab("LD1")
+hist_grp(ld, "LD1", seq(-4, 4, 0.1))
 ```
 
-This new number gives better separation between the groups than any of the
-individual measurements.
+This new number gives better separation between the groups than any of the 
+individual measurements.  Most of the points in a given group are on one side or
+the other of the origin along this new vector.
 
 ```{r}
 # Does this work the way I think it might?
 ld$Prediction <- c("Group1", "Group2")[(ld$LD1 >= 0) + 1]
-table(ld[, 2:3])
+confusion <- table(ld[, 2:3])
+confusion_df <- as.data.frame(confusion)
+kable(confusion_df)
 ```
 
 ## Where LDA Comes In
@@ -251,13 +236,8 @@ Also not mentioned in the help text.
 ### Interpretation
 
 ```{r}
-# vector dot product
-dot <- function(x, y) sum(x * y)
-
 # dot product of each obsevation with the scaling vector
-projections <- apply(observations[, 1:3], 1, function(row) {
-  dot(row, lds$scaling[, 1])
-})
+projections <- apply(observations[, 1:3], 1, dotprod, y = lds$scaling[, 1])
 
 projections <- data.frame(Projection = projections,
                           Group = observations$Group)
@@ -275,7 +255,7 @@ unit_vec <- c(0, 1, -1)/sqrt(2)
 # In other words, lds$scaling is not a unit vector itself.  Why is this?  This
 # means while it's a dot product it's not a vector projection like I figured it
 # would be.
-dot(unit_vec, lds$scaling)
+dotprod(unit_vec, lds$scaling)
 
 
 # Or to view it side-by-side with my value from before:
@@ -284,6 +264,7 @@ scalings <- data.frame(MyLD1 = comps$Component,
                        MASSLD1Norm = vecnorm(lds$scaling[, 1]))
 kable(scalings, digits = 3)
 
+# Note that MASS provides predict.lda to make this magic work
 p <- predict(lds)
 
 # also, this is not quite the same as the above.  why not?
@@ -291,5 +272,8 @@ table(cbind.data.frame(observations$Group, p$class))
 
 # at least, predict() does seem to work roughly the way I think it should.
 p2 <- factor(c("Group1", "Group2")[(p$x >= 0) + 1])
-table(cbind.data.frame(observations$Group, p2))
+confusion2 <- table(cbind.data.frame(observations$Group, p2))
+confusion2_df <- as.data.frame(confusion2)
+colnames(confusion2_df) <- c("Group", "Prediction", "Freq")
+kable(confusion2_df)
 ```
