@@ -1,4 +1,4 @@
-R Examples - MASS Package
+# R Examples - MASS Package
 
 A few contrived examples to demonstrate the [linear discriminant analysis] implemented in [MASS]`::`[lda]
 
