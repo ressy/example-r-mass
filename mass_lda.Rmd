@@ -1,24 +1,30 @@
 ---
-title: "LDA with MASS::lda"
+title: "Linear Discriminant Analysis with MASS::lda"
 author: "Jesse Connell"
-date: "11/23/2018"
+date: "11/27/2018"
 output:
   html_document:
     toc: true
     toc_depth: 3
 ---
 
-The below provides a simple walkthrough of the LDA features provided by the MASS
-R package, using a simple idealized case and more of a geometric/vector
+This report provides a simple walkthrough of the LDA features provided by the 
+MASS R package, using a few idealized cases and more of a geometric/vector
 interpretation than a classifier/machine learning one.
+<mark>Unfinished parts are marked like this.</mark>
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, fig.align = "center")
 ```
 
 ```{r helpers}
 library(ggplot2)
 library(knitr)
+library(kableExtra)
+
+# make_data_basic() below uses rnorm() to get random points on a normal 
+# distribution.  This ensures we'll always see the same "random" number here.
+set.seed(0)
 
 # create a very basic data frame of input data for the LDA.
 make_data_basic <- function(Nper=1000) {
@@ -32,29 +38,57 @@ make_data_basic <- function(Nper=1000) {
     Group = rep(c("Group1","Group2"), each=Nper)
   )
   # we'll have variables that just happen to look like z-scores...
-  for (m in c("Meas1", "Meas2", "Meas3")) {
-    obs[[m]] <- (obs[[m]] - mean(obs[[m]]) ) / sd(obs[[m]])
-  }
+  obs[, 1:3] <- scale(obs[, 1:3])
   obs
 }
 
 ### some vector math helper functions
-dotprod <- function(x, y) sum(x * y) # dot product
-vecnorm <- function(x) x/sqrt(sum(x^2)) # normalize to unit vector
+dotprod <- function(x, y) sum(x * y)  # dot product
+vecmag  <- function(x) sqrt(sum(x^2)) # magnitude
+vecnorm <- function(x) x/vecmag(x)    # normalize to unit vector
 
 # histogram for a given measurement, overlaying all groups
-hist_grp <- function(obs, measurement, breaks=seq(-5, 5, 0.1)) {
+hist_grp <- function(obs, measurement, breaks=seq(-5, 5, 0.1), grp="Group", ...) {
   ggplot(obs) +
     geom_histogram(aes_(x = obs[[measurement]],
-                        fill = obs[["Group"]]),
+                        fill = obs[[grp]]),
                    breaks = breaks,
                    position = "identity",
-                   alpha = 0.5) +
+                   alpha = 0.5,
+                   ...) +
     labs(x = measurement, y = "Count", fill = "Group")
+}
+
+# scatterplot of two measurements, overalying all groups
+scatter_grp <- function(obs, x, y, color="Group") {
+  ggplot(obs) +
+    geom_point(aes_string(x = x, y = y, color = color)) +
+    coord_fixed()
+}
+
+# Wrapper to attach LDA results to a list of objects, starting from an
+# observations data frame.
+run_lda <- function(data = list()) {
+  within(data, {
+    # The two main MASS package steps used here: run the LDA, and perform the 
+    # prediction that provides actual LD-axis values and automatic 
+    # classification.
+    lds <- MASS::lda(formula = Group ~ ., data = observations)
+    prediction <- predict(lds)
+    # Attach some output columns to the observations data frame for convenience
+    observations$Prediction <- prediction$class
+    observations$LD1 <- prediction$x[, 1]
+    observations$Wrong <- with(observations, Group != Prediction)
+    # Make a confusion matrix for every pair of actual group versus predicted
+    # group.  The more we have on the diagonal the better!
+    confusion <- table(observations$Group, observations$Prediction)
+    rownames(confusion) <- paste0("Actual", rownames(confusion))
+    colnames(confusion) <- paste0("Predicted", colnames(confusion))
+  })
 }
 ```
 
-# LDA - A Basic Case
+# LDA Case 1 - A Basic Case
 
 ## Prologue
 
@@ -63,21 +97,44 @@ sample, what best differentiates the *groups* of samples from one another?  (Not
 just, what view of the measurements best separates the *samples* from one
 another; then we'd be thinking PCA, not LDA.)  Here we have two groups and three
 continuous numeric measurements that just happen to each have a mean of zero and
-a standard deviation of one.  With only two groups we only need a single linear 
-discriminant to distinguish them, too.
+a standard deviation of one.
 
 ```{r}
 observations <- make_data_basic()
+```
+
+Here's a quick summary of how those values are distributed between the two
+groups:
+
+```{r}
 preview <- do.call(rbind,
                    lapply(split(observations, observations$Group),
                           head,
-                          n = 5))
-kable(preview, row.names = FALSE, digits = 3)
+                          n = 5))[, -4]
+k <- kable(preview, row.names = FALSE, digits = 3)
+k <- kable_styling(k, full_width = FALSE)
+k <- group_rows(k, "Group1", 1, 5)
+k <- group_rows(k, "Group2", 6, 10)
+k
+```
+
+Distribution and standard deviation per measurement, overall:
+
+```{r}
 summary(observations)
 sapply(observations[, 1:3], sd)
+```
+
+And per group:
+
+```{r}
 lapply(split(observations, observations$Group), summary)
 lapply(split(observations, observations$Group), function(chunk) sapply(chunk[, 1:3], sd))
 ```
+
+**Can we find a linear combination of the measurements that gives the best
+separation between observations in different groups?** (With only two groups we
+only need a single linear discriminant to distinguish them, too.)
 
 ### Single-Measurement View
 
@@ -96,9 +153,9 @@ see a combination of the measurements that makes it clearer?
 ### Two-Measurement View
 
 ```{r}
-ggplot(observations) + geom_point(aes(x = Meas1, y = Meas2, color = Group))
-ggplot(observations) + geom_point(aes(x = Meas1, y = Meas3, color = Group))
-ggplot(observations) + geom_point(aes(x = Meas2, y = Meas3, color = Group))
+scatter_grp(observations, "Meas1", "Meas2")
+scatter_grp(observations, "Meas1", "Meas3")
+scatter_grp(observations, "Meas2", "Meas3")
 ```
 
 Well, Meas3 versus Meas2 gives a much better hint at the best separation: a 
@@ -112,8 +169,7 @@ Or, to think of it as a single vector pointing in the direction of the most
 separation between the groups, it's a line running upper-left to lower-right.
 
 ```{r}
-ggplot(observations) + geom_point(aes(x = Meas2, y = Meas3, color = Group)) +
-  coord_cartesian(xlim = c(-3, 3), ylim = c(-3, 3)) + 
+scatter_grp(observations, "Meas2", "Meas3") +
   geom_abline(intercept = 0,
               slope = 1,
               linetype="dotted") +
@@ -124,40 +180,72 @@ ggplot(observations) + geom_point(aes(x = Meas2, y = Meas3, color = Group)) +
 ```
 
 Speaking as though the three measurements define a 3D space, that direction 
-defined by the blue arrow above lies along the unit vector <0, 1, -1>/sqrt(2)
-(if pointing from Group1 toward Group2):
+defined by the blue arrow above lies along the vector <0, 1, -1> (if pointing
+from Group1 toward Group2):
 
 ```{r}
-comps <- data.frame(Component = c(0, 1, -1)/sqrt(2))
-rownames(comps) <- paste0("Meas", 1:3)
-kable(comps, digits = 3)
+scaling <- data.frame(Component = c(0, 1, -1))
+rownames(scaling) <- paste0("Meas", 1:3)
+kable_styling(kable(scaling, digits = 3), full_width = FALSE)
 ```
 
-We can define a new axis (LD1) as a linear combination of the original three
-measurements:
+We can define a new axis ("LD") as a linear combination of the original three 
+measurements, multiplying each observation by the scaling values, component-wise 
+along the measurements, and summing (i.e., a vector dot product, when we only
+have one scaling vector).
 
 ```{r}
-ld <- apply(observations[, 1:3], 1, dotprod, y = comps$Component)
-ld <- data.frame(LD1 = ld,
+ld <- apply(observations[, 1:3], 1, dotprod, y = scaling$Component)
+ld <- data.frame(LD = ld,
            Group = observations$Group)
-hist_grp(ld, "LD1", seq(-4, 4, 0.1))
 ```
+
+We have three measurements total, so LD is a vector perpendicular to a plane (or
+the dashed line above, where we're ignoring Meas1) diving Group1 from Group2. 
+If we had more measurements, LD would be a vector with more components, but
+still basically an arrow pointing away from one group and toward another.
+
+```{r}
+hist_grp(ld, "LD") +
+  ggtitle("Custom LD") +
+  geom_vline(xintercept = 0,
+             linetype="dotted") +
+  geom_segment(x = 0, y = 0, xend = 1, yend = 0,
+               arrow = arrow(angle = 45,
+                             length = unit(0.2, "cm"),
+                             type="closed"))
+```
+
 
 This new number gives better separation between the groups than any of the 
-individual measurements.  Most of the points in a given group are on one side or
-the other of the origin along this new vector.
+individual measurements.  Note that measurements that provide more useful 
+information on separating the groups have a larger component of this new vector,
+while measurements that do little to distinguish the groups have a component 
+near zero (as Meas1 does here).  **But note that in order to handle a 
+measurement that has much larger values than another measurement but the same 
+effect size on the group separation, we'd need a *smaller* vector component for
+that "larger" measurement.  This must be taken into account when comparing the
+vector components between measurements.**  See LDA Case 2 below for more on
+that.
+
+Most of the points in a given group are on one side or the other of the origin 
+(in this particular case!) along LD, and we can classify observations fairly
+reliably by that fact alone:
 
 ```{r}
-# Does this work the way I think it might?
-ld$Prediction <- c("Group1", "Group2")[(ld$LD1 >= 0) + 1]
-confusion <- table(ld[, 2:3])
-confusion_df <- as.data.frame(confusion)
-kable(confusion_df)
+# Here we're banking on the fact that everything's centered on the origin.  See
+# case 5 below for a situation where it's not.
+ld$Prediction <- c("Group1", "Group2")[(ld$LD >= 0) + 1]
+my_confusion <- as.data.frame(table(ld[, 2:3]))
+colnames(my_confusion) <- c("Group", "Prediction", "Freq")
+kable_styling(kable(my_confusion), full_width = FALSE)
 ```
 
 ## Where LDA Comes In
 
-LDA can find that best direction for us automatically.
+LDA can find that best direction for us automatically, for arbitrary numbers of 
+groups and dimensions, and can take into account scaling/centering issues and
+the separation of groups along the new axis/axes.
 
 ```{r LDA Basic}
 lds <- MASS::lda(formula = Group ~ . , data = observations)
@@ -184,7 +272,7 @@ Just numbers of samples per group.
 #### means
 
 ```{r echo=FALSE}
-kable(lds$means)
+kable_styling(kable(lds$means), full_width = FALSE)
 ```
  
 Just the means per measurement per group.
@@ -192,11 +280,11 @@ Just the means per measurement per group.
 #### scaling
 
 ```{r echo=FALSE}
-kable(lds$scaling, digits=3)
+kable_styling(kable(lds$scaling, digits=3), full_width = FALSE)
 ```
 
-**Hey look, that points in the same direction as the vector in measurement-space
-we noticed before!**  More on this later.
+**Hey look, that's the same vector in measurement-space we noticed before!** 
+More on this later.
 
 #### lev
 
@@ -235,45 +323,289 @@ Also not mentioned in the help text.
 
 ### Interpretation
 
+The `scaling` entry given by `MASS::lda` gives the multipliers per measurement 
+for each linear discriminant.  Here there's three measurements and only one
+discriminant, and we get the same value expected earlier for this simple case:
+
 ```{r}
-# dot product of each obsevation with the scaling vector
-projections <- apply(observations[, 1:3], 1, dotprod, y = lds$scaling[, 1])
-
-projections <- data.frame(Projection = projections,
-                          Group = observations$Group)
-
-ggplot(projections) +
-  geom_histogram(aes(x = Projection, fill = Group),
-                 position = 'identity',
-                 breaks = seq(-5, 5, 0.1),
-                 alpha = 0.5)
-
-# unit vector pointing from Group1 to Group2, in the same direction as
-# lds$scaling.
-unit_vec <- c(0, 1, -1)/sqrt(2)
-# huh, it got longer by sqrt(2) even though it already lay along lds$scaling. 
-# In other words, lds$scaling is not a unit vector itself.  Why is this?  This
-# means while it's a dot product it's not a vector projection like I figured it
-# would be.
-dotprod(unit_vec, lds$scaling)
-
-
-# Or to view it side-by-side with my value from before:
-scalings <- data.frame(MyLD1 = comps$Component,
-                       MASSLD1 = lds$scaling[, 1],
-                       MASSLD1Norm = vecnorm(lds$scaling[, 1]))
-kable(scalings, digits = 3)
-
-# Note that MASS provides predict.lda to make this magic work
-p <- predict(lds)
-
-# also, this is not quite the same as the above.  why not?
-table(cbind.data.frame(observations$Group, p$class))
-
-# at least, predict() does seem to work roughly the way I think it should.
-p2 <- factor(c("Group1", "Group2")[(p$x >= 0) + 1])
-confusion2 <- table(cbind.data.frame(observations$Group, p2))
-confusion2_df <- as.data.frame(confusion2)
-colnames(confusion2_df) <- c("Group", "Prediction", "Freq")
-kable(confusion2_df)
+scalings <- data.frame(Scaling = scaling[, 1],
+                       MyScaling = lds$scaling[, 1],
+                       check.names = FALSE)
+kable_styling(kable(scalings, digits = 3), full_width = FALSE)
 ```
+
+MASS provides a predict function that handles lda objects and automatically does
+the projection of the (possibly many) measurements onto the (fewer) linear 
+discriminants, and also classifies observations into the groups given.
+
+```{r}
+# Note that it's MASS:::predict.lda that makes this magic work
+prediction <- predict(lds)
+```
+
+`prediction$class` is a factor containing the automatic classification,
+`prediction$posterior` a matrix with a column for each group (class) containing
+posterior probabilities for that classification for each observation (row), and
+`prediction$x` is a matrix with a column for each linear discriminant that gives
+the value of the discriminant for each observation.
+
+This last one, `x`, is the same projection done manually above where the "LD"
+axis was created, and looks about the same:
+
+```{r}
+hist_grp(data.frame(LD=prediction$x[, 1], Group=observations$Group), "LD") +
+  ggtitle("Automatic LD")
+```
+
+We get essentially the same prediction output here as we got with the 
+handwaving argument about the Meas3 versus Meas2 diagonal above:
+
+```{r}
+confusion <- as.data.frame(table(observations$Group, prediction$class))
+colnames(confusion) <- c("Group", "Prediction", "Freq")
+confusion$MyFreq <- my_confusion$Freq
+kable_styling(kable(confusion), full_width = FALSE)
+```
+
+(There's some slight variation in these results since `lds$scaling` takes into 
+account the bit of random variation in this example and doesn't point perfectly 
+along the diagonal.)
+
+# LDA Case 2 - Scaled Values
+
+That first case had measurements that were all normalized already.  What if the
+input values are much bigger?
+
+```{r}
+case2 <- run_lda(within(list(), {
+  scaler <- 1000
+  observations[,1:3] <- observations[,1:3]*scaler
+}))
+
+scaler_compare <- cbind.data.frame(lds$scaling, case2$lds$scaling, case2$lds$scaling*case2$scaler)
+colnames(scaler_compare) <- c("LD1", "LD1Big", "LD1BigNorm")
+kable_styling(kable(scaler_compare, digits=5), full_width = FALSE)
+```
+
+The scaling vector normalizes the values by shrinking them back down to unit
+standard deviation per measurement, so the final linear discriminant values per
+observation are still on the same scale as before.
+
+What about a case where each measurement has a *different* standard deviation?
+
+```{r}
+case2_stretch <- run_lda(within(list(), {
+  scalers <- c(1, 10, 1000)
+  observations[, 1:3] <- t(apply(observations[, 1:3], 1, function(x) x*scalers))
+}))
+
+scaler_compare <- cbind.data.frame(LD1 = lds$scaling[, 1],
+                                   LD1Stretch = case2_stretch$lds$scaling[, 1],
+                                   LD1StretchNorm = case2_stretch$lds$scaling[, 1]*case2_stretch$scalers)
+kable_styling(kable(scaler_compare, digits=5), full_width = FALSE)
+```
+
+If we take the scaling multipliers as-is, Meas2 looks much more significant than
+Meas3, but we know both are about equally informative; it only worked out that 
+way here because the spread of Meas3 values was very different than that of 
+Meas2.  The first case was a simple one where all the measurements had similar
+properties from the start.  **In the general case we need to take the spread of
+the values along each measurement into account to be able to compare these 
+scaling multipliers side-by-side.**  The easiest way to make this an 
+apples-to-apples comparison is to just scale the input to standard deviation of
+one for each measurement.
+
+# LDA Case 3 - An Offset from the Origin
+
+What if the input measurements *aren't* centered on the origin?  For example if
+the measurements have means at 20, 40, and 60.
+
+```{r}
+case3 <- run_lda(within(list(), {
+  shift <- (1:3)*20
+  for (i in 1:3) {
+   observations[, i] <- observations[, i] + shift[i] 
+  }
+  rm(i)
+}))
+```
+
+The vector is identical.  MASS shifted the values back to zero for the
+calculation.  But then, how do we handle it for the prediction?
+
+The LD vector values are the same as before, and the prediction works out as
+expected.
+
+```{r}
+p3 <- predict(case3$lds)
+c3ld <- data.frame(p3$x, Group=observations$Group)
+hist_grp(c3ld, "LD1")
+c3ld_predicted <- data.frame(p3$x, Group=p3$class)
+hist_grp(c3ld_predicted, "LD1")
+```
+
+If we did it manually, but ignoring the offset:
+
+```{r}
+case3 <- within(case3, {
+  projections <- apply(observations[, 1:3], 1, dotprod, y = lds$scaling[, 1])
+  projections <- data.frame(Projection = projections,
+                          Group = observations$Group)  
+})
+
+hist_grp(case3$projections, "Projection", breaks = NULL, bins = 100)
+```
+
+Or, with centering included:
+
+```{r}
+case3 <- within(case3, {
+  center <- colMeans(observations[, 1:3])
+  projections <- apply(observations[, 1:3], 1, function(row) {
+    dotprod(x = row - center, y = lds$scaling[, 1])
+  })
+  projections <- data.frame(Projection = projections,
+                          Group = observations$Group)  
+})
+
+hist_grp(case3$projections, "Projection")
+```
+
+`MASS:::predict.lda` makes calls to `scale` that center by mean, but do not
+scale, so this makes sense.
+
+# LDA Case 4 - Degenerate Input
+
+What if one or more of the measurements are not just uninformative but
+completely useless?
+
+```{r error=TRUE}
+case4 <- run_lda(within(list(), {
+  observations[, "Meas1"] <- 0 # The first Measurment has no variation at all
+}))
+```
+
+Whoops, it refuses to run.  ("The function tries hard to detect if the
+within-class covariance matrix is singular. If any variable has within-group
+variance less than tol^2 it will stop and report the variable as constant. This
+could result from poor scaling of the problem, but is more likely to result from
+constant variables.")
+
+# LDA Case 5 - An Offset Midpoint Between Groups
+
+Even though the observations are centered automatically, what if the best point 
+of separation between groups is not the origin?  That is, with only one 
+discriminant, what if the prediction is doing something other than checking for 
+a positive/negative value?
+
+Here we'll slice the data strictly along that diagonal from the first case, and
+also shift its location by 1.0 along LD1.
+
+```{r}
+case5 <- run_lda(within(list(), {
+  # Shift the dividing line along LD1 a bit, but the measurement values remain
+  # the same.
+  observations$Group <- factor(ifelse(with(observations, Meas3 - Meas2 > -1),
+                               "Group1",
+                               "Group2"), levels = levels(observations$Group))
+}))
+
+with(case5, scatter_grp(observations, x = "Meas2", y = "Meas3")) +
+  geom_abline(intercept = 0,
+              slope = 1,
+              linetype="dotted",
+               color = "gray") +
+  geom_abline(intercept = -1,
+              slope = 1,
+              linetype="dotted") +
+  geom_segment(x = 0.5, y = -0.5, xend = 1.5, yend = -1.5,
+               arrow = arrow(angle = 45,
+                             length = unit(0.2, "cm"),
+                             type="closed")) +
+  coord_cartesian(xlim = c(-3, 3), ylim = c(-3, 3)) +
+  ggtitle("Meas3 vs Meas2 - Offset Midpoint and Strict Group Separation")
+```
+
+There, that should be easy to split.  But, it actually classifies the last few 
+Group1 cases as Group2.  <mark>(Why?  Because of the strange distribution in
+group membership?  Investigate more.)</mark>
+
+```{r}
+with(case5, hist_grp(observations, "LD1")) +
+  scale_x_continuous(breaks = seq(-5, 5, 1)) +
+  ggtitle("LD1 - Offset Midpoint and Strict Group Separation")
+case5$observations$GroupWrong <- with(case5$observations,
+                                      factor(paste(Group, ifelse(Wrong, "Wrong", "Right")),
+                                             levels = c("Group1 Right",
+                                                        "Group1 Wrong",
+                                                        "Group2 Right",
+                                                        "Group2 Wrong")))
+with(case5, hist_grp(observations, "LD1", grp = "GroupWrong")) +
+  scale_fill_discrete(drop=FALSE) +
+  scale_x_continuous(breaks = seq(-5, 5, 1)) +
+  ggtitle("LD1 - Predicted Group Membership")
+```
+
+<mark>TODO explain more what predict() can do here; with that function, we don't
+have to worry about where these breakpoints are.</mark>
+
+# LDA Case 6 - Categorical Measurements
+
+What happens with categorical (factor) variables?  The geometric view doesn't 
+apply without some rearranging on the input.
+
+```{r}
+# Adding a column for a categorical measurement
+case6 <- run_lda(within(list(), {
+  # A factor with four levels, and varying proportions between them.
+  N <- 4
+  observations$Meas4 <- sample(1:N, # N distinct values
+                               nrow(observations), # total observations
+                               prob = 1:N, # increasing probability (it'll normalize automatically)
+                               replace = TRUE) # allow repeats
+  observations$Meas4 <-  as.factor(observations$Meas4)
+  levels(observations$Meas4) <- LETTERS[1:N]
+}))
+
+# Alternatively, what if we have separate columns for each possible category 
+# above, where 1 means present and 0 means absent (and the first category is
+# missing but implied by all-zero on the rest)?
+case6_wide <- run_lda(within(list(), {
+  cols <- do.call(cbind.data.frame,
+                  lapply(levels(case6$observations$Meas4)[-1],
+                         function(lvl) (case6$observations$Meas4 == lvl) + 0))
+  colnames(cols) <- paste0("Meas4", levels(case6$observations$Meas4)[-1])
+  observations <- cbind(observations, cols)
+}))
+```
+
+It looks like it just splits the single factor with N levels into N-1 separate 
+variables, each with one for present and zero for absent (so the means 
+correspond to the proportions).  It would only need N-1 since all zero implies 
+the first level.  That's a guess from the return value, but it gives identical
+output when given the separate columns of binary input (`case6_wide` above), so I
+think that makes a strong case.
+
+```{r}
+k <- kable(with(case6, lds$means[, paste0("Meas4", levels(observations$Meas4)[-1])]))
+kable_styling(k, full_width = FALSE)
+k <- kable(with(case6, table(observations$Meas4)/nrow(observations)))
+kable_styling(k, full_width = FALSE)
+```
+
+When giving a factor as a column versus giving N-1 separate columns for the 
+different factor levels:
+
+```{r}
+case6_compare <- cbind.data.frame(case6$lds$scaling,
+                                  case6_wide$lds$scaling)
+colnames(case6_compare) <- c("LD1_Factor", "LD1_Boolean")
+kable_styling(kable(case6_compare, digits = 3), full_width = FALSE)
+```
+
+# LDA Case 7 - More Groups
+
+The prediction gets more complicated with more than two groups, since there are
+multiple "dividing lines" and also more than one linear discriminant.
+
+<mark>TODO fill this in.</mark>
