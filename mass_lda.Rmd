@@ -60,10 +60,10 @@ hist_grp <- function(obs, measurement, breaks=seq(-5, 5, 0.1), grp="Group", ...)
 }
 
 # scatterplot of two measurements, overalying all groups
-scatter_grp <- function(obs, x, y, color="Group") {
+scatter_grp <- function(obs, x, y, color="Group", ratio=1) {
   ggplot(obs) +
     geom_point(aes_string(x = x, y = y, color = color)) +
-    coord_fixed()
+    coord_fixed(ratio = ratio)
 }
 
 # Wrapper to attach LDA results to a list of objects, starting from an
@@ -403,6 +403,36 @@ scaler_compare <- cbind.data.frame(LD1 = lds$scaling[, 1],
                                    LD1Stretch = case2_stretch$lds$scaling[, 1],
                                    LD1StretchNorm = case2_stretch$lds$scaling[, 1]*case2_stretch$scalers)
 kable_styling(kable(scaler_compare, digits=5), full_width = FALSE)
+```
+
+Both measurements still give the same amount of separation between the groups, 
+so we know we still want to give them equal weight in determining LD1 in a 
+sense.  But the numbers are 100 times larger for Meas3 versus Meas2, and a value
+of 10 along the Meas2 axis is "worth" as much as 1000 along the Meas3 axis in
+terms of group separation. Accordingly, LDA uses a far smaller scaling
+multiplier for Meas 3 here.
+
+```{r}
+with(case2_stretch, {
+  scatter_grp(observations, "Meas2", "Meas3", ratio = scalers[2]/scalers[3]) +
+  geom_abline(intercept = 0,
+              slope = scalers[3]/scalers[2],
+              linetype="dotted") +
+  geom_segment(x = 0, y = 0, xend = 10, yend = -1000,
+               arrow = arrow(angle = 45,
+                             length = unit(0.2, "cm"),
+                             type="closed"))
+})
+```
+
+Accordingly, we still get the same distribution along LD1, since the separation
+is still essentially the same.
+
+```{r}
+with(case2_stretch, {
+  hist_grp(data.frame(LD=prediction$x[, 1], Group=observations$Group), "LD") +
+  ggtitle("Automatic LD")
+})
 ```
 
 If we take the scaling multipliers as-is, Meas2 looks much more significant than
